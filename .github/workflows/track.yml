@@ -4,8 +4,9 @@ name: track-chrome
 # DEPS -> the PDFium SHA Chrome ships, bumps PDFIUM_SHA in build.yml, and tags
 # chrome-<version>, which triggers build.yml.
 #
-# Requires a PAT with `contents: write` stored as TRACK_TOKEN: pushes made with
-# the default GITHUB_TOKEN do not start other workflow runs.
+# No PAT needed: the tag is pushed with the default GITHUB_TOKEN, then build.yml
+# is started via `gh workflow run` (workflow_dispatch is the one event the
+# default token may trigger).
 
 on:
   schedule:
@@ -14,6 +15,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   track:
@@ -21,8 +23,6 @@ jobs:
     steps:
       - name: Checkout this repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.TRACK_TOKEN }}
 
       - name: Resolve PDFium SHA from the latest Chrome stable
         id: resolve
@@ -71,3 +71,11 @@ jobs:
           git commit -am "bump PDFium to Chrome $VERSION ($NEW)"
           git tag "chrome-${VERSION}"
           git push --follow-tags
+
+      - name: Dispatch build.yml (workflow_dispatch)
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.resolve.outputs.version }}"
+          gh workflow run build.yml -f version="$VERSION"

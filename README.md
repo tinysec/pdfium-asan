@@ -10,7 +10,7 @@ ASAN-instrumented fuzzer build of **PDFium** — Chrome's PDF renderer. Rebuilt 
 
 `track.yml` polls Chrome stable **daily** and resolves the PDFium SHA Chrome actually ships (Chrome DEPS → `pdfium_revision`). Unchanged → nothing happens. Changed → bump + tag `chrome-<version>` → `build.yml` runs → new Release.
 
-> Requires a `TRACK_TOKEN` PAT (`contents: write`) so the tracker's push starts the build.
+> No PAT or secret needed — the tracker runs on the default `GITHUB_TOKEN` and dispatches the build via `workflow_dispatch`.
 
 ```bash
 git tag v1 && git push origin v1   # manual trigger
