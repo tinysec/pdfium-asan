@@ -1,0 +1,73 @@
+name: track-chrome
+
+# Daily check for a new Chrome stable release. Resolves the version -> Chrome
+# DEPS -> the PDFium SHA Chrome ships, bumps PDFIUM_SHA in build.yml, and tags
+# chrome-<version>, which triggers build.yml.
+#
+# Requires a PAT with `contents: write` stored as TRACK_TOKEN: pushes made with
+# the default GITHUB_TOKEN do not start other workflow runs.
+
+on:
+  schedule:
+    - cron: '41 6 * * *'   # daily ~06:41 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.TRACK_TOKEN }}
+
+      - name: Resolve PDFium SHA from the latest Chrome stable
+        id: resolve
+        run: |
+          # Latest Chrome stable (win64). The branch-head equals the BUILD
+          # component (3rd field), e.g. 149.0.7827.156 -> 7827.
+          VERSION=$(curl -fsSL \
+            'https://versionhistory.googleapis.com/v1/chrome/platforms/win64/channels/stable/versions?pageSize=1' \
+            | jq -r '.versions[0].version')
+          BUILD=$(printf '%s' "$VERSION" | cut -d. -f3)
+          echo "Chrome stable: $VERSION (branch-head $BUILD)"
+
+          CDEPS=$(curl -fsSL \
+            "https://chromium.googlesource.com/chromium/src/+/refs/branch-heads/${BUILD}/DEPS?format=TEXT" \
+            | base64 -d)
+
+          NEW=$(printf '%s' "$CDEPS" \
+            | sed -nE "s/.*'pdfium_revision': '([0-9a-f]{40})'.*/\1/p" | head -1)
+
+          test -n "$NEW" || { echo "failed to resolve PDFium SHA"; exit 1; }
+          echo "Resolved PDFium SHA: $NEW"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$NEW" >> "$GITHUB_OUTPUT"
+
+      - name: Bump PDFIUM_SHA if newer
+        id: bump
+        run: |
+          CURRENT=$(grep -E '^  PDFIUM_SHA:' .github/workflows/build.yml | awk '{print $2}')
+          NEW="${{ steps.resolve.outputs.sha }}"
+          if [ "$CURRENT" = "$NEW" ]; then
+            echo "PDFium already at $CURRENT; nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sed -i "s|^  PDFIUM_SHA: .*|  PDFIUM_SHA: $NEW|" .github/workflows/build.yml
+          echo "Bumping $CURRENT -> $NEW"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and tag
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          git config user.name "track-chrome bot"
+          git config user.email "actions@github.com"
+          NEW="${{ steps.resolve.outputs.sha }}"
+          VERSION="${{ steps.resolve.outputs.version }}"
+          git commit -am "bump PDFium to Chrome $VERSION ($NEW)"
+          git tag "chrome-${VERSION}"
+          git push --follow-tags

@@ -1,0 +1,24 @@
+# Workspaces the workflows clone/build into — never commit these.
+/src/
+/build/
+/out/
+/dist/
+/pdfium/
+/skia/
+/depot_tools/
+/upstream_ljt/
+
+# Fetched / intermediate sources.
+/harness.c
+/afl_driver.cpp
+/afl_driver.o
+
+# Build artifacts.
+*.exe
+*.pdb
+*.dll
+*.o
+*.a
+*.lib
+*.obj
+__pycache__/

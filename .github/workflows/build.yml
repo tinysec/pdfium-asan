@@ -1,0 +1,135 @@
+name: build
+
+on:
+  push:
+    tags: ["v*", "chrome-*"]
+  workflow_dispatch:
+
+env:
+  # PDFium as locked by Chrome 149. Bumped automatically by track.yml.
+  PDFIUM_SHA: be702d63baba7507bb1f6f6ff2d35be9c133c08c
+  PDFIUM_REPO: https://pdfium.googlesource.com/pdfium.git
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        # PDFium ships one libFuzzer target; ASAN via the GN toolchain. Both
+        # platforms use GN + depot_tools. (No AFL++ leg: AFL++ is Linux-native,
+        # and GN's clang is hard to retarget to afl-clang-fast.)
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Free up disk space (Linux)
+        if: runner.os == 'Linux'
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Enable long path support (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # PDFium's checkout paths can exceed the 260-char Windows limit.
+          git config --global core.longpaths true
+          $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+          New-ItemProperty -Path $key -Name LongPathsEnabled -Value 1 -PropertyType DWord -Force | Out-Null
+
+      - name: Install depot_tools
+        shell: bash
+        run: |
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "$PWD/depot_tools" >> "$GITHUB_PATH"
+
+      - name: gclient sync (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          gclient config --unmanaged "$PDFIUM_REPO"
+          gclient sync --no-history --shallow
+          cd pdfium
+          git fetch --depth 1 origin "$PDFIUM_SHA"
+          git checkout FETCH_HEAD
+          gclient sync --no-history --shallow
+          gclient runhooks
+
+      - name: gclient sync (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          gclient config --unmanaged "$env:PDFIUM_REPO"
+          gclient sync --no-history --shallow
+          Push-Location pdfium
+          git fetch --depth 1 origin "$env:PDFIUM_SHA"
+          git checkout FETCH_HEAD
+          gclient sync --no-history --shallow
+          gclient runhooks
+          Pop-Location
+
+      - name: Generate build config and build pdfium_fuzzer (Linux)
+        if: runner.os == 'Linux'
+        working-directory: pdfium
+        run: |
+          gn gen out/Fuzz --args='
+            is_debug=false
+            is_asan=true
+            use_libfuzzer=true
+            pdf_is_standalone=true
+            clang_use_chrome_plugins=false
+            treat_warnings_as_errors=false
+            # Emit full debug info; on Windows this produces a .pdb next to the
+            # binary so ASAN stack traces resolve to file:line.
+            symbol_level=1
+          '
+          ninja -C out/Fuzz pdfium_fuzzer
+
+      - name: Generate build config and build pdfium_fuzzer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: pdfium
+        run: |
+          gn gen out/Fuzz --args='is_debug=false is_asan=true use_libfuzzer=true pdf_is_standalone=true clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=1'
+          ninja -C out/Fuzz pdfium_fuzzer
+
+      - name: Smoke test (one empty run)
+        shell: bash
+        working-directory: pdfium
+        run: |
+          # Run the binary only; the glob must not pick up the Windows .pdb.
+          BIN=$(ls out/Fuzz/pdfium_fuzzer out/Fuzz/pdfium_fuzzer.exe 2>/dev/null | head -1)
+          "$BIN" -runs=1 >/dev/null 2>&1 || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdfium-libfuzzer-${{ runner.os }}
+          path: pdfium/out/Fuzz/pdfium_fuzzer*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
