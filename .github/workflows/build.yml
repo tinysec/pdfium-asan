@@ -93,14 +93,13 @@ jobs:
           gclient runhooks
           Pop-Location
 
-      - name: Generate build config and build all fuzzer targets (Linux)
+      - name: Generate build config and build the standalone ASAN target (Linux)
         if: runner.os == 'Linux'
         working-directory: pdfium
         run: |
           gn gen out/Fuzz --args='
             is_debug=false
             is_asan=true
-            use_libfuzzer=true
             pdf_is_standalone=true
             clang_use_chrome_plugins=false
             treat_warnings_as_errors=false
@@ -108,34 +107,41 @@ jobs:
             # binary so ASAN stack traces resolve to file:line.
             symbol_level=1
           '
-          # Chrome-150 PDFium dropped the single pdfium_fuzzer umbrella target;
-          # "fuzzers" is the group that aggregates every *_fuzzer executable.
-          ninja -C out/Fuzz fuzzers
+          # PDFium standalone ships NO fuzzer executables by design
+          # (testing/fuzzers/BUILD.gn: "It does not link and create fuzzer
+          # executables. That is done in Chromium.") -- it only defines fuzzer
+          # source sets, so `ninja fuzzers` builds ~3000 dependency objects but
+          # produces zero executables. Build pdfium_test instead: a standalone,
+          # own-main() ASAN binary that loads/renders a PDF file. That is the
+          # exact shape WinAFL drives on Windows (and AFL++ QEMU/FRIDA on Linux).
+          # Do NOT set use_libfuzzer=true: that adds -fsanitize=fuzzer globally,
+          # which would clash with pdfium_test's own main().
+          ninja -C out/Fuzz pdfium_test
 
-      - name: Generate build config and build all fuzzer targets (Windows)
+      - name: Generate build config and build the standalone ASAN target (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: pdfium
         run: |
-          gn gen out/Fuzz --args='is_debug=false is_asan=true use_libfuzzer=true pdf_is_standalone=true clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=1'
-          ninja -C out/Fuzz fuzzers
+          gn gen out/Fuzz --args='is_debug=false is_asan=true pdf_is_standalone=true clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=1'
+          ninja -C out/Fuzz pdfium_test
 
-      - name: Smoke test (one empty run per fuzzer)
+      - name: Smoke test (pdfium_test loads)
         shell: bash
         working-directory: pdfium
         run: |
-          # One short run per produced fuzzer binary; skip Windows .pdb sidecars.
-          for BIN in out/Fuzz/*_fuzzer*; do
-            [ -e "$BIN" ] || continue
-            case "$BIN" in *.pdb|*.o|*.obj|*.a|*.lib|*.ninja*) continue;; esac
-            "$BIN" -runs=1 >/dev/null 2>&1 || true
-          done
+          # pdfium_test is a standalone CLI that renders PDFs; with no args it
+          # prints usage. Just confirm the binary loads (it is not a libFuzzer
+          # executable, so -runs=1 does not apply).
+          BIN=out/Fuzz/pdfium_test
+          [ -f out/Fuzz/pdfium_test.exe ] && BIN=out/Fuzz/pdfium_test.exe
+          "./$BIN" --help >/dev/null 2>&1 || "./$BIN" >/dev/null 2>&1 || true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pdfium-libfuzzer-${{ runner.os }}
-          path: pdfium/out/Fuzz/*_fuzzer*
+          name: pdfium-asan-${{ runner.os }}
+          path: pdfium/out/Fuzz/pdfium_test*
           if-no-files-found: error
 
   release:
