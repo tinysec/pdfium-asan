@@ -93,7 +93,7 @@ jobs:
           gclient runhooks
           Pop-Location
 
-      - name: Generate build config and build the standalone ASAN target (Linux)
+      - name: Generate build config (ASAN, Linux)
         if: runner.os == 'Linux'
         working-directory: pdfium
         run: |
@@ -103,45 +103,69 @@ jobs:
             pdf_is_standalone=true
             clang_use_chrome_plugins=false
             treat_warnings_as_errors=false
-            # Emit full debug info; on Windows this produces a .pdb next to the
-            # binary so ASAN stack traces resolve to file:line.
             symbol_level=1
           '
-          # PDFium standalone ships NO fuzzer executables by design
-          # (testing/fuzzers/BUILD.gn: "It does not link and create fuzzer
-          # executables. That is done in Chromium.") -- it only defines fuzzer
-          # source sets, so `ninja fuzzers` builds ~3000 dependency objects but
-          # produces zero executables. Build pdfium_test instead: a standalone,
-          # own-main() ASAN binary that loads/renders a PDF file. That is the
-          # exact shape WinAFL drives on Windows (and AFL++ QEMU/FRIDA on Linux).
-          # Do NOT set use_libfuzzer=true: that adds -fsanitize=fuzzer globally,
-          # which would clash with pdfium_test's own main().
-          ninja -C out/Fuzz pdfium_test
 
-      - name: Generate build config and build the standalone ASAN target (Windows)
+      - name: Generate build config (ASAN, Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: pdfium
         run: |
           gn gen out/Fuzz --args='is_debug=false is_asan=true pdf_is_standalone=true clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=1'
+
+      - name: Build pdfium_test + archive libpdfium
+        working-directory: pdfium
+        shell: bash
+        run: |
+          mkdir -p dist/lib/include dist/fuzz
+
+          # PDFium standalone ships NO fuzzer executables by design
+          # (testing/fuzzers/BUILD.gn: "It does not link and create fuzzer
+          # executables. That is done in Chromium."). So:
+          #  * pdfium_test -- the standalone, own-main() ASAN PDF renderer. This
+          #    is the ready-to-fuzz target (WinAFL drives it directly, no harness
+          #    needed). A true libFuzzer pdfium binary needs GN executable
+          #    injection and is a follow-up.
+          #  * libpdfium -- `pdfium` is a component()/source_set, so there is no
+          #    single .a produced; we archive the compiled objects (excluding the
+          #    testing/ tree) into one static library for linking a harness.
+          # Do NOT set use_libfuzzer=true: it adds -fsanitize=fuzzer globally,
+          # which clashes with pdfium_test's own main().
           ninja -C out/Fuzz pdfium_test
 
-      - name: Smoke test (pdfium_test loads)
-        shell: bash
+          AR=llvm-ar
+          if [ "$RUNNER_OS" = "Windows" ]; then AR=llvm-lib; fi
+          OBJEXT=o
+          if [ "$RUNNER_OS" = "Windows" ]; then OBJEXT=obj; fi
+
+          # Collect every compiled object except the testing/ tree, then archive.
+          find out/Fuzz/obj -type f -name "*.${OBJEXT}" \
+            ! -path "*/testing/*" -print0 \
+            | xargs -0 "$AR" rcs dist/lib/libpdfium.a
+
+          # Ship the pdfium_test executable and its public API headers.
+          find out/Fuzz -maxdepth 1 -type f \
+            \( -name 'pdfium_test' -o -name 'pdfium_test.exe' -o -name 'pdfium_test*.pdb' \) \
+            -exec cp {} dist/fuzz/ \;
+          cp public/*.h dist/lib/include/ 2>/dev/null || true
+          ls -la dist/lib dist/lib/include dist/fuzz
+
+      - name: Verify artifacts
         working-directory: pdfium
+        shell: bash
         run: |
-          # pdfium_test is a standalone CLI that renders PDFs; with no args it
-          # prints usage. Just confirm the binary loads (it is not a libFuzzer
-          # executable, so -runs=1 does not apply).
-          BIN=out/Fuzz/pdfium_test
-          [ -f out/Fuzz/pdfium_test.exe ] && BIN=out/Fuzz/pdfium_test.exe
-          "./$BIN" --help >/dev/null 2>&1 || "./$BIN" >/dev/null 2>&1 || true
+          STAT=dist/lib/libpdfium.a
+          FZ=$(find dist/fuzz -maxdepth 1 -type f \( -name 'pdfium_test' -o -name 'pdfium_test.exe' \) | head -1)
+          test -s "$STAT" || { echo "ERROR: libpdfium.a missing or empty"; exit 1; }
+          test -n "$FZ"   || { echo "ERROR: pdfium_test missing"; exit 1; }
+          echo "static-lib: $STAT"
+          echo "pdfium_test: $FZ"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: pdfium-asan-${{ runner.os }}
-          path: pdfium/out/Fuzz/pdfium_test*
+          path: pdfium/dist
           if-no-files-found: error
 
   release:
