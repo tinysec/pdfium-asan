@@ -10,8 +10,7 @@ on:
         required: false
 
 env:
-  # PDFium as locked by Chrome 149. Bumped automatically by track.yml.
-  PDFIUM_SHA: be702d63baba7507bb1f6f6ff2d35be9c133c08c
+  # The Chrome-locked PDFium SHA lives in chrome.lock (written by track.yml).
   PDFIUM_REPO: https://pdfium.googlesource.com/pdfium.git
 
 jobs:
@@ -42,6 +41,12 @@ jobs:
       - name: Checkout this repository
         uses: actions/checkout@v4
 
+      - name: Read Chrome-locked revision from chrome.lock
+        id: lock
+        shell: bash
+        run: |
+          echo "sha=$(jq -r .sha chrome.lock)" >> "$GITHUB_OUTPUT"
+
       - name: Enable long path support (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -63,7 +68,7 @@ jobs:
           gclient config --unmanaged "$PDFIUM_REPO"
           gclient sync --no-history --shallow
           cd pdfium
-          git fetch --depth 1 origin "$PDFIUM_SHA"
+          git fetch --depth 1 origin "${{ steps.lock.outputs.sha }}"
           git checkout FETCH_HEAD
           gclient sync --no-history --shallow
           gclient runhooks
@@ -75,7 +80,7 @@ jobs:
           gclient config --unmanaged "$env:PDFIUM_REPO"
           gclient sync --no-history --shallow
           Push-Location pdfium
-          git fetch --depth 1 origin "$env:PDFIUM_SHA"
+          git fetch --depth 1 origin "${{ steps.lock.outputs.sha }}"
           git checkout FETCH_HEAD
           gclient sync --no-history --shallow
           gclient runhooks

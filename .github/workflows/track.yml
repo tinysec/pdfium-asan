@@ -1,16 +1,18 @@
 name: track-chrome
 
-# Daily check for a new Chrome stable release. Resolves the version -> Chrome
-# DEPS -> the PDFium SHA Chrome ships, bumps PDFIUM_SHA in build.yml, and tags
-# chrome-<version>, which triggers build.yml.
+# Checks for a new Chrome stable release every 6 hours. Resolves the version ->
+# Chrome DEPS -> the PDFium SHA Chrome ships, writes it to chrome.lock, tags
+# chrome-<version>, and dispatches build.yml. No-op when the SHA is unchanged.
 #
-# No PAT needed: the tag is pushed with the default GITHUB_TOKEN, then build.yml
-# is started via `gh workflow run` (workflow_dispatch is the one event the
-# default token may trigger).
+# No PAT needed: chrome.lock is a root-level data file (NOT under
+# .github/workflows), so the default GITHUB_TOKEN may push the bump. build.yml
+# is then started via `gh workflow run` (workflow_dispatch is the one event the
+# default token may trigger). Storing the SHA in a workflow file is impossible
+# without a PAT because the default token can never push workflow-file changes.
 
 on:
   schedule:
-    - cron: '41 6 * * *'   # daily ~06:41 UTC
+    - cron: '27 2,8,14,20 * * *'   # every 6h, staggered across repos
   workflow_dispatch:
 
 permissions:
@@ -47,17 +49,20 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sha=$NEW" >> "$GITHUB_OUTPUT"
 
-      - name: Bump PDFIUM_SHA if newer
+      - name: Write chrome.lock if newer
         id: bump
         run: |
-          CURRENT=$(grep -E '^  PDFIUM_SHA:' .github/workflows/build.yml | awk '{print $2}')
           NEW="${{ steps.resolve.outputs.sha }}"
+          VERSION="${{ steps.resolve.outputs.version }}"
+          CURRENT=$(jq -r .sha chrome.lock)
           if [ "$CURRENT" = "$NEW" ]; then
             echo "PDFium already at $CURRENT; nothing to do."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          sed -i "s|^  PDFIUM_SHA: .*|  PDFIUM_SHA: $NEW|" .github/workflows/build.yml
+          # chrome.lock is a root-level data file; the default token may push it.
+          jq -n --arg v "$VERSION" --arg s "$NEW" \
+            '{chrome_version:$v, sha:$s}' > chrome.lock
           echo "Bumping $CURRENT -> $NEW"
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
@@ -68,7 +73,8 @@ jobs:
           git config user.email "actions@github.com"
           NEW="${{ steps.resolve.outputs.sha }}"
           VERSION="${{ steps.resolve.outputs.version }}"
-          git commit -am "bump PDFium to Chrome $VERSION ($NEW)"
+          git add chrome.lock
+          git commit -m "bump PDFium to Chrome $VERSION ($NEW)"
           git tag "chrome-${VERSION}"
           git push --follow-tags
 
