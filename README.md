@@ -5,15 +5,3 @@ ASAN-instrumented fuzzer build of **PDFium** — Chrome's PDF renderer. Rebuilt 
 ![build](https://github.com/tinysec/pdfium-asan/actions/workflows/build.yml/badge.svg)
 ![track](https://github.com/tinysec/pdfium-asan/actions/workflows/track.yml/badge.svg)
 ![release](https://img.shields.io/github/v/release/tinysec/pdfium-asan?label=release)
-
-**Engine:** libFuzzer (Linux + Windows) · **Sanitizer:** ASAN · **Symbols:** Windows `.pdb` included
-
-`track.yml` polls Chrome stable **daily** and resolves the PDFium SHA Chrome actually ships (Chrome DEPS → `pdfium_revision`). Unchanged → nothing happens. Changed → bump + tag `chrome-<version>` → `build.yml` runs → new Release.
-
-> No PAT or secret needed — the tracker runs on the default `GITHUB_TOKEN` and dispatches the build via `workflow_dispatch`.
-
-```bash
-git tag v1 && git push origin v1   # manual trigger
-```
-
-No harness is committed here — PDFium's built-in `pdfium_fuzzer` target (GN + depot_tools) is built from the source tree.
