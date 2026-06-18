@@ -63,7 +63,11 @@ jobs:
         shell: bash
         run: |
           git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
-          echo "$PWD/depot_tools" >> "$GITHUB_PATH"
+          # $PWD is Unix-style (/d/a/...) under Git-bash on Windows, which pwsh
+          # cannot resolve as a PATH entry. $GITHUB_WORKSPACE is always a native
+          # path (D:\a\... on Windows, /home/runner/... on Linux), so it works
+          # for both the pwsh and bash gclient steps that follow.
+          echo "$GITHUB_WORKSPACE/depot_tools" >> "$GITHUB_PATH"
 
       - name: gclient sync (Linux)
         if: runner.os == 'Linux'
