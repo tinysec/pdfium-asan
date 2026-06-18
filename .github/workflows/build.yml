@@ -133,7 +133,12 @@ jobs:
           # which clashes with pdfium_test's own main().
           ninja -C out/Fuzz pdfium_test
 
-          AR=llvm-ar
+          # Archive the compiled objects into one static lib. On Linux use the
+          # system 'ar' (always present via binutils/build-essential); pdfium's
+          # clang-built objects are normal ELF .o files, so plain ar suffices
+          # without pulling in the llvm tools package. On Windows pdfium is
+          # built with the LLVM toolchain, so use llvm-lib there.
+          AR=ar
           if [ "$RUNNER_OS" = "Windows" ]; then AR=llvm-lib; fi
           OBJEXT=o
           if [ "$RUNNER_OS" = "Windows" ]; then OBJEXT=obj; fi
