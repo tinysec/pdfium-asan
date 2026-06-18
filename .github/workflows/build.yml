@@ -197,9 +197,28 @@ jobs:
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Pack each artifact into a zip
+        # GitHub release assets are FLAT: a file's release path is just its
+        # basename and the directory structure is stripped. PDFium's two legs
+        # would collide on a direct flat upload -- both produce libpdfium.a and
+        # both ship the SAME public/*.h headers, so the cross-artifact duplicate
+        # basenames make softprops 404 on the stale metadata update ("error
+        # updating release asset metadata ... Not Found") and fail the release
+        # job. Packing each artifact into ONE per-platform zip gives every asset
+        # a unique name and keeps the lib/ + include/ + fuzz/ tree the consumer
+        # needs intact inside the archive.
+        run: |
+          mkdir -p out
+          for d in artifacts/*/; do
+            name=$(basename "$d")
+            (cd artifacts && zip -rq "../out/${name}-${{ steps.tag.outputs.tag }}.zip" "$name")
+          done
+          echo "--- release zips ---"
+          ls -la out
+
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.tag }}
-          files: artifacts/**/*
+          files: out/*.zip
