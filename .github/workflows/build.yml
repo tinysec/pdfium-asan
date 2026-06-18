@@ -12,6 +12,9 @@ on:
 env:
   # The Chrome-locked PDFium SHA lives in chrome.lock (written by track.yml).
   PDFIUM_REPO: https://pdfium.googlesource.com/pdfium.git
+  # Use the locally-installed MSVC toolchain on Windows instead of trying to
+  # download Google's private Chrome toolchain (which needs auth and fails in CI).
+  DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
 
 jobs:
   build:
@@ -86,7 +89,7 @@ jobs:
           gclient runhooks
           Pop-Location
 
-      - name: Generate build config and build pdfium_fuzzer (Linux)
+      - name: Generate build config and build all fuzzer targets (Linux)
         if: runner.os == 'Linux'
         working-directory: pdfium
         run: |
@@ -101,29 +104,34 @@ jobs:
             # binary so ASAN stack traces resolve to file:line.
             symbol_level=1
           '
-          ninja -C out/Fuzz pdfium_fuzzer
+          # Chrome-150 PDFium dropped the single pdfium_fuzzer umbrella target;
+          # "fuzzers" is the group that aggregates every *_fuzzer executable.
+          ninja -C out/Fuzz fuzzers
 
-      - name: Generate build config and build pdfium_fuzzer (Windows)
+      - name: Generate build config and build all fuzzer targets (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: pdfium
         run: |
           gn gen out/Fuzz --args='is_debug=false is_asan=true use_libfuzzer=true pdf_is_standalone=true clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=1'
-          ninja -C out/Fuzz pdfium_fuzzer
+          ninja -C out/Fuzz fuzzers
 
-      - name: Smoke test (one empty run)
+      - name: Smoke test (one empty run per fuzzer)
         shell: bash
         working-directory: pdfium
         run: |
-          # Run the binary only; the glob must not pick up the Windows .pdb.
-          BIN=$(ls out/Fuzz/pdfium_fuzzer out/Fuzz/pdfium_fuzzer.exe 2>/dev/null | head -1)
-          "$BIN" -runs=1 >/dev/null 2>&1 || true
+          # One short run per produced fuzzer binary; skip Windows .pdb sidecars.
+          for BIN in out/Fuzz/*_fuzzer*; do
+            [ -e "$BIN" ] || continue
+            case "$BIN" in *.pdb|*.o|*.obj|*.a|*.lib|*.ninja*) continue;; esac
+            "$BIN" -runs=1 >/dev/null 2>&1 || true
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: pdfium-libfuzzer-${{ runner.os }}
-          path: pdfium/out/Fuzz/pdfium_fuzzer*
+          path: pdfium/out/Fuzz/*_fuzzer*
           if-no-files-found: error
 
   release:
