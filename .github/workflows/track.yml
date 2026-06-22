@@ -2,7 +2,7 @@ name: track-chrome
 
 # Checks for a new Chrome stable release every 6 hours. Resolves the version ->
 # Chrome DEPS -> the PDFium SHA Chrome ships, writes it to chrome.lock, tags
-# chrome-<version>, and dispatches build.yml. No-op when the SHA is unchanged.
+# pdfium-<sha8>, and dispatches build.yml. No-op when the SHA is unchanged.
 #
 # No PAT needed: chrome.lock is a root-level data file (NOT under
 # .github/workflows), so the default GITHUB_TOKEN may push the bump. build.yml
@@ -72,10 +72,14 @@ jobs:
           git config user.name "track-chrome bot"
           git config user.email "actions@github.com"
           NEW="${{ steps.resolve.outputs.sha }}"
+          SHORT="${NEW:0:8}"
           VERSION="${{ steps.resolve.outputs.version }}"
           git add chrome.lock
           git commit -m "bump PDFium to Chrome $VERSION ($NEW)"
-          git tag "chrome-${VERSION}"
+          # Tag by library + short SHA, NOT Chrome version: the SHA changes on
+          # every bump (including same-version security backports), so a
+          # SHA-keyed tag never silently skips a rebuild.
+          git tag "pdfium-${SHORT}"
           git push --follow-tags
 
       - name: Dispatch build.yml (workflow_dispatch)
@@ -83,5 +87,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ steps.resolve.outputs.version }}"
-          gh workflow run build.yml -f version="$VERSION"
+          NEW="${{ steps.resolve.outputs.sha }}"
+          SHORT="${NEW:0:8}"
+          gh workflow run build.yml -f tag="pdfium-${SHORT}"

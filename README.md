@@ -12,13 +12,13 @@ ASAN-instrumented build of **PDFium** — Chrome's PDF renderer. Rebuilt automat
 ships (PDFium is pinned directly in Chrome DEPS). The
 [`track-chrome`](.github/workflows/track.yml) workflow runs every 6 hours: it
 resolves the latest Chrome stable, reads the PDFium SHA from Chrome DEPS, and
-when it has changed it bumps `chrome.lock`, tags `chrome-<version>`, and
-triggers [`build`](.github/workflows/build.yml). Each `chrome-<version>` tag
+when it has changed it bumps `chrome.lock`, tags `pdfium-<sha8>`, and
+triggers [`build`](.github/workflows/build.yml). Each `pdfium-<sha8>` tag
 becomes a GitHub release.
 
 ## Release artifacts
 
-Each release is published at its `chrome-<version>` tag as **one zip per
+Each release is published at its `pdfium-<sha8>` tag as **one zip per
 platform** (so both legs' `libpdfium.a` and the shared `public/*.h` headers do
 not collide in GitHub's flat asset namespace). Each zip contains:
 
